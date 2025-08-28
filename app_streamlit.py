@@ -17,6 +17,7 @@ mp_drawing = mp.solutions.drawing_utils
 USER_MAP_FILE = "user_map.json"
 
 
+# ----------------- User Management -----------------
 def load_user_map():
     if os.path.exists(USER_MAP_FILE):
         with open(USER_MAP_FILE, "r") as f:
@@ -84,6 +85,7 @@ def delete_user(user_id, data_dir="data"):
         return True, f"🗑️ Deleted {deleted_files} images + entry for {user_name} (ID {user_id}). (No data left to retrain)"
 
 
+# ----------------- Detection & Recognition -----------------
 def detect(frame, faceCascade, img_id, user_id, face_mesh, csv_writer):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = faceCascade.detectMultiScale(gray, 1.3, 5)
@@ -96,7 +98,6 @@ def detect(frame, faceCascade, img_id, user_id, face_mesh, csv_writer):
         os.makedirs("data", exist_ok=True)
         cv2.imwrite(f"data/user.{user_id}.{img_id}.jpg", face_img)
         saved = True
-      #  cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
 
     if results.multi_face_landmarks:
         for face_landmarks in results.multi_face_landmarks:
@@ -104,8 +105,8 @@ def detect(frame, faceCascade, img_id, user_id, face_mesh, csv_writer):
                 image=frame,
                 landmark_list=face_landmarks,
                 connections=mp_face_mesh.FACEMESH_CONTOURS,
-                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(255,255,255), thickness=1, circle_radius=1),
-                connection_drawing_spec=mp_drawing.DrawingSpec(color=(0,255,255), thickness=1)
+                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=1),
+                connection_drawing_spec=mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=1)
             )
             h, w, _ = frame.shape
             row = [user_id, img_id]
@@ -128,7 +129,6 @@ def recognize(frame, clf, faceCascade, face_mesh, user_map, threshold=70):
             face_img = gray[y:y+h, x:x+w]
             id_, conf = clf.predict(face_img)
 
-            # ✅ Only accept if model is confident enough
             if conf < threshold and str(id_) in user_map:
                 name = user_map[str(id_)]
                 label = f"{name}"
@@ -152,14 +152,14 @@ def recognize(frame, clf, faceCascade, face_mesh, user_map, threshold=70):
                 image=frame,
                 landmark_list=face_landmarks,
                 connections=mp_face_mesh.FACEMESH_CONTOURS,
-                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(255,255,255), thickness=1, circle_radius=1),
-                connection_drawing_spec=mp_drawing.DrawingSpec(color=(0,255,255), thickness=1)
+                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=1),
+                connection_drawing_spec=mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=1)
             )
 
     return frame
 
 
-
+# ----------------- Training -----------------
 def train_classifier(data_dir="data"):
     faces, ids = [], []
     if not os.path.exists(data_dir):
@@ -186,10 +186,21 @@ def train_classifier(data_dir="data"):
     recognizer.save("classifier.yml")
     return True
 
+
+# ----------------- Streamlit UI -----------------
 st.set_page_config(page_title="Face Recognition", page_icon="🧑")
 st.title("🧑 Real Time Face Recognition")
 
-menu = ["📸 Capture Dataset", "🧠 Train Model", "🔍 Recognize Face", "🗑️ Delete User"]
+menu = [
+    "📸 Capture Dataset",
+    "🧠 Train Model",
+    "🔍 Recognize Face",
+    "🗑️ Delete User",
+    "📋 View Registered Users",
+    "🖼️ Upload Image for Recognition",
+    "📊 View User Statistics",
+    "🔄 Update User Name"
+]
 choice = st.sidebar.selectbox("Menu", menu)
 
 faceCascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -200,6 +211,7 @@ if os.path.exists("classifier.yml"):
     clf.read("classifier.yml")
 
 
+# ----------------- Features -----------------
 if choice == "📸 Capture Dataset":
     suggested_id = get_next_user_id()
     st.info(f"Next available User ID is {suggested_id}")
@@ -281,3 +293,48 @@ elif choice == "🗑️ Delete User":
             st.success(msg)
         else:
             st.error(msg)
+
+elif choice == "📋 View Registered Users":
+    if len(user_map) == 0:
+        st.info("No users registered yet.")
+    else:
+        data = []
+        for uid, name in user_map.items():
+            count = len([f for f in os.listdir("data") if f.startswith(f"user.{uid}.")])
+            data.append({"User ID": uid, "Name": name, "Images": count})
+        st.table(data)
+
+elif choice == "🖼️ Upload Image for Recognition":
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+    if uploaded_file is not None:
+        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, 1)
+        with mp_face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5) as face_mesh:
+            frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
+        st.image(frame, channels="BGR")
+
+elif choice == "📊 View User Statistics":
+    total_users = len(user_map)
+    total_images = len(os.listdir("data")) if os.path.exists("data") else 0
+    st.metric("Total Registered Users", total_users)
+    st.metric("Total Images in Dataset", total_images)
+    if total_users > 0:
+        for uid, name in user_map.items():
+            count = len([f for f in os.listdir("data") if f.startswith(f"user.{uid}.")])
+            st.write(f"**{name} (ID: {uid})** → {count} images")
+
+elif choice == "🔄 Update User Name":
+    upd_id = st.number_input("Enter User ID to Update", min_value=1, step=1)
+    new_name = st.text_input("Enter New Name")
+    if st.button("Update Name"):
+        if str(upd_id) in user_map:
+            old_name = user_map[str(upd_id)]
+            user_map[str(upd_id)] = new_name
+            save_user_map(user_map)
+            st.success(f"✅ Updated user {old_name} (ID {upd_id}) → {new_name}")
+        else:
+            st.error("⚠️ User ID not found.")
