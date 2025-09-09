@@ -187,9 +187,9 @@ def get_frame_cloud_or_local(user_id, max_images=50, cap=None):
             stframe.image(frame, channels="BGR", caption=f"Saved Images: {saved_count}/{max_images}")
 
     csv_file.close()
-    if cap is not None:
-        cap.release()
-    cv2.destroyAllWindows()
+    if "IS_CLOUD" not in os.environ:
+        cv2.destroyAllWindows()
+
 
 # ---------------- Streamlit UI ---------------- #
 st.set_page_config(page_title="Face Recognition", page_icon="🧑")
@@ -278,7 +278,7 @@ elif choice=="🔍 Recognize Face":
                 frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
                 stframe.image(frame, channels="BGR")
 
-# Upload Image for Recognition
+
 elif choice=="🖼️ Upload Image for Recognition":
     uploaded_file = st.file_uploader("Upload an image", type=["jpg","jpeg","png"])
     if uploaded_file is not None:
@@ -288,7 +288,6 @@ elif choice=="🖼️ Upload Image for Recognition":
             frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
         st.image(frame, channels="BGR")
 
-# View Registered Users
 elif choice=="📋 View Registered Users":
     if len(user_map)==0:
         st.info("No users registered.")
