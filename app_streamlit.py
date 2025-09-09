@@ -188,7 +188,10 @@ def get_frame_cloud_or_local(user_id, max_images=50, cap=None):
 
     csv_file.close()
     if "IS_CLOUD" not in os.environ:
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
 
 
 # ---------------- Streamlit UI ---------------- #
