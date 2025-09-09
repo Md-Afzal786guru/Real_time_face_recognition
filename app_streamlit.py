@@ -48,6 +48,9 @@ COUNTRY_CODES = {
     "France": "+33", "Japan": "+81", "Brazil": "+55", "Mexico": "+52",
 }
 
+# ---------------- Detect if running on Streamlit Cloud ---------------- #
+IS_CLOUD = os.environ.get("IS_CLOUD", None) is not None
+
 # ---------------- User Map ---------------- #
 def load_user_map():
     if os.path.exists(USER_MAP_FILE):
@@ -157,7 +160,7 @@ def train_classifier(data_dir="data"):
     return True
 
 # ---------------- Capture Function ---------------- #
-def get_frame_cloud_or_local(user_id, max_images=50, cap=None):
+def get_frame_cloud_or_local(user_id, max_images=50):
     saved_count = 0
     stframe = st.empty()
     os.makedirs("landmarks", exist_ok=True)
@@ -167,7 +170,7 @@ def get_frame_cloud_or_local(user_id, max_images=50, cap=None):
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
         while saved_count < max_images:
-            if "IS_CLOUD" in os.environ:
+            if IS_CLOUD:
                 uploaded_image = st.camera_input("Take a picture")
                 if uploaded_image is None:
                     st.info("Please take a picture...")
@@ -175,24 +178,23 @@ def get_frame_cloud_or_local(user_id, max_images=50, cap=None):
                 file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
                 frame = cv2.imdecode(file_bytes, 1)
             else:
-                if cap is None:
-                    cap = cv2.VideoCapture(0)
+                cap = cv2.VideoCapture(0)
                 ret, frame = cap.read()
                 if not ret:
                     st.error("Failed to read from webcam.")
                     break
+
             frame, saved = detect(frame, faceCascade, saved_count, user_id, face_mesh, csv_writer)
             if saved:
                 saved_count += 1
             stframe.image(frame, channels="BGR", caption=f"Saved Images: {saved_count}/{max_images}")
 
     csv_file.close()
-    if "IS_CLOUD" not in os.environ:
+    if not IS_CLOUD:
         try:
             cv2.destroyAllWindows()
         except cv2.error:
             pass
-
 
 # ---------------- Streamlit UI ---------------- #
 st.set_page_config(page_title="Face Recognition", page_icon="🧑")
@@ -245,8 +247,7 @@ if choice=="📸 Capture Dataset":
             full_phone_number = f"{country_code}{phone_without_code}"
             user_map[str(user_id)] = {"name":user_name,"phone":full_phone_number,"address":user_address,"gender":user_gender,"country":selected_country}
             save_user_map(user_map)
-            cap = None if "IS_CLOUD" in os.environ else cv2.VideoCapture(0)
-            get_frame_cloud_or_local(user_id, max_images=50, cap=cap)
+            get_frame_cloud_or_local(user_id)
             st.success(f"✅ Dataset captured for {user_name} (ID: {user_id})")
 
 # Train Model
@@ -266,18 +267,18 @@ elif choice=="🔍 Recognize Face":
         st.warning("⚠️ No trained model or users. Capture dataset and train first.")
     elif st.button("Start Recognition"):
         st.info("🔎 Recognition started. Close Streamlit to stop.")
-        cap = None if "IS_CLOUD" in os.environ else cv2.VideoCapture(0)
         stframe = st.empty()
         with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
             while True:
-                if cap is not None:
-                    ret, frame = cap.read()
-                    if not ret: break
-                else:
+                if IS_CLOUD:
                     uploaded_image = st.camera_input("Take a picture")
                     if uploaded_image is None: continue
                     file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
                     frame = cv2.imdecode(file_bytes, 1)
+                else:
+                    cap = cv2.VideoCapture(0)
+                    ret, frame = cap.read()
+                    if not ret: break
                 frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
                 stframe.image(frame, channels="BGR")
 
