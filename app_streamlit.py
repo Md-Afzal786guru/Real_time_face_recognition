@@ -165,9 +165,10 @@ def get_frame_any_device(user_id, max_images=50):
     csv_file = open(f"landmarks/user_{user_id}.csv", mode="w", newline="")
     csv_writer = csv.writer(csv_file)
 
-    with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
+    with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
+                               min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
         while saved_count < max_images:
-            uploaded_image = st.camera_input("📸 Take a picture")
+            uploaded_image = st.camera_input("📸 Take a picture", key=f"capture_{saved_count}")
             if uploaded_image is None:
                 st.info(f"Saved {saved_count}/{max_images}. Please capture more images.")
                 continue
