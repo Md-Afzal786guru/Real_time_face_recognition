@@ -176,7 +176,7 @@ if os.path.exists("classifier.yml"):
     clf.read("classifier.yml")
 
 # ---------------- Sidebar ---------------- #
-public_menu_options = ["📸 Capture Dataset", "🧠 Train Model", "🔍 Recognize Face", "🖼️ Upload Image for Recognition"]
+public_menu_options = ["📸 Capture Dataset", "🧠 Train Model", "🔍 Recognize Face"]
 choice = st.sidebar.selectbox("Public Menu", public_menu_options)
 
 st.sidebar.header("Admin Login")
@@ -237,23 +237,41 @@ if choice == "📸 Capture Dataset":
     if st.session_state.capture_in_progress:
         st.info(
             f"Saving images for User ID: {st.session_state.current_user_id}. {st.session_state.saved_count}/50 saved.")
+        st.info(
+            "📷 Please ensure camera access is enabled in your browser settings. On mobile, go to your browser's site settings and allow camera access.")
         progress_bar = st.progress(st.session_state.saved_count / 50)
 
-        uploaded_image = st.camera_input("Take a picture", key="capture_cam_input")
+        # Camera input with fallback to file upload
+        input_method = st.radio("Choose input method:", ["Use Camera", "Upload Images"], key="input_method")
 
-        if uploaded_image is not None and st.session_state.saved_count < 50:
-            file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
-            frame = cv2.imdecode(file_bytes, 1)
+        frame = None
+        if input_method == "Use Camera":
+            uploaded_image = st.camera_input("Take a picture", key=f"capture_cam_input_{st.session_state.saved_count}")
+            if uploaded_image is not None:
+                file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+                frame = cv2.imdecode(file_bytes, 1)
+        else:
+            uploaded_files = st.file_uploader("Upload images (max 50)", type=["jpg", "jpeg", "png"],
+                                              accept_multiple_files=True,
+                                              key=f"upload_capture_{st.session_state.saved_count}")
+            if uploaded_files:
+                for uploaded_file in uploaded_files:
+                    if st.session_state.saved_count >= 50:
+                        break
+                    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+                    frame = cv2.imdecode(file_bytes, 1)
+                    break  # Process one image at a time to mimic camera input flow
 
-            saved = detect_and_save(frame, faceCascade, st.session_state.saved_count, st.session_state.current_user_id,
-                                    mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
-                                                          min_detection_confidence=0.5, min_tracking_confidence=0.5))
-
-            if saved:
-                st.session_state.saved_count += 1
-                progress_bar.progress(st.session_state.saved_count / 50)
-                st.info(f"Image {st.session_state.saved_count} saved.")
-                st.rerun()  # Rerun to update the UI and get a fresh camera input
+        if frame is not None and st.session_state.saved_count < 50:
+            with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5,
+                                       min_tracking_confidence=0.5) as face_mesh:
+                saved = detect_and_save(frame, faceCascade, st.session_state.saved_count,
+                                        st.session_state.current_user_id, face_mesh)
+                if saved:
+                    st.session_state.saved_count += 1
+                    progress_bar.progress(st.session_state.saved_count / 50)
+                    st.info(f"Image {st.session_state.saved_count} saved.")
+                    st.rerun()
 
         if st.session_state.saved_count >= 50:
             st.success(f"✅ Dataset captured for User ID: {st.session_state.current_user_id}")
@@ -278,27 +296,31 @@ elif choice == "🔍 Recognize Face":
     if clf is None or len(user_map) == 0:
         st.warning("⚠️ No trained model or users. Capture dataset and train first.")
     else:
-        st.info("🔎 Upload or take a picture to recognize a face.")
-        uploaded_image = st.camera_input("Take a picture", key="recognize_cam_input")
-        if uploaded_image is not None:
-            file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
-            frame = cv2.imdecode(file_bytes, 1)
+        st.info("🔎 Use your camera or upload an image to recognize a face.")
+        st.info(
+            "📷 Please ensure camera access is enabled in your browser settings. On mobile, go to your browser's site settings and allow camera access.")
+
+        input_method = st.radio("Choose input method:", ["Use Camera", "Upload Image"], key="recognition_input_method")
+
+        frame = None
+        if input_method == "Use Camera":
+            uploaded_image = st.camera_input("Take a picture", key="recognize_cam_input")
+            if uploaded_image is not None:
+                file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+                frame = cv2.imdecode(file_bytes, 1)
+        else:
+            uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"], key="recognize_upload")
+            if uploaded_file is not None:
+                file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+                frame = cv2.imdecode(file_bytes, 1)
+
+        if frame is not None:
             with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5,
                                        min_tracking_confidence=0.5) as face_mesh:
                 frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
             st.image(frame, channels="BGR")
 
-
-elif choice == "🖼️ Upload Image for Recognition":
-    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
-    if uploaded_file is not None:
-        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-        frame = cv2.imdecode(file_bytes, 1)
-        with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5,
-                                   min_tracking_confidence=0.5) as face_mesh:
-            frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
-        st.image(frame, channels="BGR")
-
+# View Registered Users
 elif choice == "📋 View Registered Users":
     if len(user_map) == 0:
         st.info("No users registered.")
@@ -312,7 +334,7 @@ elif choice == "📋 View Registered Users":
                 address = info.get("address", "N/A")
                 country = info.get("country", "N/A")
             else:
-                name = info;
+                name = info
                 phone = gender = address = country = "N/A"
             count = len([f for f in os.listdir("data") if f.startswith(f"user.{uid}.")])
             data.append(
@@ -360,13 +382,13 @@ elif choice == "📊 View User Statistics":
         fig, ax = plt.subplots()
         colors = cm.tab20(np.linspace(0, 1, len(df)))
         ax.bar(df["User"], df["Images"], color=colors)
-        ax.set_xlabel("Users");
-        ax.set_ylabel("Images");
+        ax.set_xlabel("Users")
+        ax.set_ylabel("Images")
         ax.set_title("Images per User")
         st.pyplot(fig)
         fig2, ax2 = plt.subplots()
         ax2.pie(df["Images"], labels=df["User"], autopct="%1.1f%%", startangle=90)
-        ax2.axis("equal");
+        ax2.axis("equal")
         ax2.set_title("Dataset Distribution")
         st.pyplot(fig2)
 
