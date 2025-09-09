@@ -1,9 +1,6 @@
-tensorflow
-keras
-pandas
+streamlit
+opencv-contrib-python-headless
+mediapipe
 numpy
-jupyter
-notebook
-tqdm
-opencv-contrib-python
-
+pandas
+matplotlib
