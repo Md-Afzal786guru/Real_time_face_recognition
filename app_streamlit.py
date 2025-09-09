@@ -12,31 +12,27 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 import hashlib
 
-# ---------------- Admin Authentication ---------------- #
+
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD_HASH = hashlib.sha256("admin123".encode()).hexdigest()
+ADMIN_PASSWORD_HASH = hashlib.sha256("admin123".encode('utf-8')).hexdigest()
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
-
 def authenticate(username, password):
-    hashed_password = hashlib.sha256(password.encode()).hexdigest()
+    hashed_password = hashlib.sha256(password.encode('utf-8')).hexdigest()  # Consistent encoding
     if username == ADMIN_USERNAME and hashed_password == ADMIN_PASSWORD_HASH:
         st.session_state.authenticated = True
         st.success("Logged in as Admin!")
     else:
-        st.error("Incorrect username or password.")
-        st.session_state.authenticated = False
-
+        st.error("Incorrect username or password. Please try again. (Username: admin, Password: admin123)")
+    st.rerun()
 
 def logout():
     st.session_state.authenticated = False
     st.info("Logged out successfully.")
     st.rerun()
 
-
-# ---------------- Setup ---------------- #
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 logging.getLogger("tensorflow").setLevel(logging.FATAL)
@@ -51,19 +47,15 @@ COUNTRY_CODES = {
     "France": "+33", "Japan": "+81", "Brazil": "+55", "Mexico": "+52",
 }
 
-
-# ---------------- User Map ---------------- #
 def load_user_map():
     if os.path.exists(USER_MAP_FILE):
         with open(USER_MAP_FILE, "r") as f:
             return json.load(f)
     return {}
 
-
 def save_user_map(user_map):
     with open(USER_MAP_FILE, "w") as f:
         json.dump(user_map, f, indent=2)
-
 
 def get_next_user_id():
     user_map = load_user_map()
@@ -72,36 +64,35 @@ def get_next_user_id():
     existing_ids = sorted(int(uid) for uid in user_map.keys())
     return max(existing_ids) + 1
 
-
-# ---------------- Face Detection & Recognition ---------------- #
-def detect_and_save(frame, faceCascade, img_id, user_id, face_mesh):
+def detect(frame, faceCascade, img_id, user_id, face_mesh, csv_writer):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = faceCascade.detectMultiScale(gray, 1.3, 5)
     saved = False
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb)
 
-    os.makedirs("data", exist_ok=True)
-    os.makedirs("landmarks", exist_ok=True)
-
-    if faces is not None and len(faces) > 0:
-        (x, y, w, h) = faces[0]
+    for (x, y, w, h) in faces:
         face_img = gray[y:y + h, x:x + w]
+        os.makedirs("data", exist_ok=True)
         cv2.imwrite(f"data/user.{user_id}.{img_id}.jpg", face_img)
         saved = True
 
     if results.multi_face_landmarks:
         for face_landmarks in results.multi_face_landmarks:
+            mp_drawing.draw_landmarks(
+                image=frame,
+                landmark_list=face_landmarks,
+                connections=mp_face_mesh.FACEMESH_CONTOURS,
+                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=1),
+                connection_drawing_spec=mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=1)
+            )
             h, w, _ = frame.shape
             row = [user_id, img_id]
             for lm in face_landmarks.landmark:
                 row.append(int(lm.x * w))
                 row.append(int(lm.y * h))
-            with open(f"landmarks/user_{user_id}.csv", mode="a", newline="") as f:
-                csv_writer = csv.writer(f)
-                csv_writer.writerow(row)
-    return saved
-
+            csv_writer.writerow(row)
+    return frame, saved
 
 def recognize(frame, clf, faceCascade, face_mesh, user_map, threshold=70):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -139,7 +130,6 @@ def recognize(frame, clf, faceCascade, face_mesh, user_map, threshold=70):
             )
     return frame
 
-
 def train_classifier(data_dir="data"):
     faces, ids = [], []
     if not os.path.exists(data_dir):
@@ -163,8 +153,44 @@ def train_classifier(data_dir="data"):
     recognizer.save("classifier.yml")
     return True
 
+def get_frame_cloud_or_local(user_id, max_images=50, cap=None):
+    saved_count = 0
+    stframe = st.empty()
+    os.makedirs("landmarks", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
+    csv_file = open(f"landmarks/user_{user_id}.csv", mode="w", newline="")
+    csv_writer = csv.writer(csv_file)
 
-# ---------------- Streamlit UI ---------------- #
+    with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
+        while saved_count < max_images:
+            if "IS_CLOUD" in os.environ:
+                uploaded_image = st.camera_input("Take a picture")
+                if uploaded_image is None:
+                    st.info("Please take a picture...")
+                    continue
+                file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+                frame = cv2.imdecode(file_bytes, 1)
+            else:
+                if cap is None:
+                    cap = cv2.VideoCapture(0)
+                ret, frame = cap.read()
+                if not ret:
+                    st.error("Failed to read from webcam.")
+                    break
+            frame, saved = detect(frame, faceCascade, saved_count, user_id, face_mesh, csv_writer)
+            if saved:
+                saved_count += 1
+            stframe.image(frame, channels="BGR", caption=f"Saved Images: {saved_count}/{max_images}")
+
+    csv_file.close()
+    if "IS_CLOUD" not in os.environ:
+        try:
+            cap.release()
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
+
+
 st.set_page_config(page_title="Face Recognition", page_icon="🧑")
 st.title("🧑 Real Time Face Recognition")
 
@@ -175,112 +201,73 @@ if os.path.exists("classifier.yml"):
     clf = cv2.face.LBPHFaceRecognizer_create()
     clf.read("classifier.yml")
 
-# ---------------- Sidebar ---------------- #
-public_menu_options = ["📸 Capture Dataset", "🧠 Train Model", "🔍 Recognize Face"]
+
+st.sidebar.title("🧑Face Recognition")
+public_menu_options = ["📸 Capture Dataset", "🧠 Train Model", "🔍 Recognize Face", "🖼️ Upload Image for Recognition"]
 choice = st.sidebar.selectbox("Public Menu", public_menu_options)
 
 st.sidebar.header("Admin Login")
 with st.sidebar.form(key='login_form'):
+    st.markdown("### Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-    submit_button = st.form_submit_button("Login")
-    logout_button = st.form_submit_button("Logout")
+    st.markdown("---")  # Adds a horizontal line for separation
+    submit_button = st.form_submit_button("Login", help="Click to log in as admin")
     if submit_button:
-        authenticate(username, password)
+        authenticate(username, password)  # Call authenticate on button click
+    if st.session_state.authenticated:
+        if st.form_submit_button("Logout", help="Click to log out"):
+            logout()
 
 if st.session_state.authenticated:
-    st.sidebar.subheader("Admin Actions")
-    admin_choice = st.sidebar.selectbox("Admin Menu",
-                                        ["📋 View Registered Users", "🔄 Update All User Info", "📊 View User Statistics",
-                                         "🗑️ Delete User", "🚪 Logout"])
+    st.sidebar.header("Admin Actions")
+    admin_choice = st.sidebar.selectbox("Admin Menu", ["📋 View Registered Users", "🔄 Update All User Info", "📊 View User Statistics", "🗑️ Delete User"])
     choice = admin_choice
 
-# ---------------- App Logic ---------------- #
-# Capture Dataset
+st.markdown(
+    """
+    <style>
+    .sidebar .sidebar-content {
+        padding: 20px;
+    }
+    .sidebar .stButton>button {
+        width: 100%;
+        margin-bottom: 10px;
+    }
+    .sidebar .stTextInput>input {
+        margin-bottom: 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 if choice == "📸 Capture Dataset":
-    if "capture_in_progress" not in st.session_state:
-        st.session_state.capture_in_progress = False
-        st.session_state.saved_count = 0
-        st.session_state.current_user_id = None
-        st.session_state.csv_file_initialized = False
+    suggested_id = get_next_user_id()
+    st.info(f"Next available User ID is {suggested_id}")
+    user_id = st.number_input("Enter User ID", min_value=suggested_id, value=suggested_id, step=1)
+    user_name = st.text_input("Enter User Name")
+    selected_country = st.selectbox("Select Your Country", list(COUNTRY_CODES.keys()))
+    country_code = COUNTRY_CODES[selected_country]
+    user_phoneNo = st.text_input(f"Enter Your Phone No (e.g., {country_code} ...)")
+    user_address = st.text_area("Enter Your Address")
+    user_gender = st.selectbox("Select Your Gender", ["Male", "Female", "Other"])
 
-    if not st.session_state.capture_in_progress:
-        suggested_id = get_next_user_id()
-        st.info(f"Next available User ID is {suggested_id}")
-        user_id = st.number_input("Enter User ID", min_value=suggested_id, value=suggested_id, step=1,
-                                  key='user_id_input')
-        user_name = st.text_input("Enter User Name", key='user_name_input')
-        selected_country = st.selectbox("Select Your Country", list(COUNTRY_CODES.keys()), key='country_select')
-        country_code = COUNTRY_CODES[selected_country]
-        user_phoneNo = st.text_input(f"Enter Your Phone No (e.g., {country_code} ...)", key='phone_input')
-        user_address = st.text_area("Enter Your Address", key='address_input')
-        user_gender = st.selectbox("Select Your Gender", ["Male", "Female", "Other"], key='gender_select')
-
-        start_capture = st.button("Start Capture")
-        if start_capture:
-            phone_without_code = user_phoneNo.strip()
-            if not user_name.strip():
-                st.error("⚠️ Enter a valid name!")
-            elif not phone_without_code.isdigit() or len(phone_without_code) != 10:
-                st.error("⚠️ Enter a valid 10-digit phone number!")
-            else:
-                full_phone_number = f"{country_code}{phone_without_code}"
-                user_map[str(user_id)] = {"name": user_name, "phone": full_phone_number, "address": user_address,
-                                          "gender": user_gender, "country": selected_country}
-                save_user_map(user_map)
-                st.session_state.capture_in_progress = True
-                st.session_state.saved_count = 0
-                st.session_state.current_user_id = user_id
-                st.session_state.csv_file_initialized = False
-                st.rerun()
-
-    if st.session_state.capture_in_progress:
-        st.info(
-            f"Saving images for User ID: {st.session_state.current_user_id}. {st.session_state.saved_count}/50 saved.")
-        st.info(
-            "📷 Please ensure camera access is enabled in your browser settings. On mobile, go to your browser's site settings and allow camera access.")
-        progress_bar = st.progress(st.session_state.saved_count / 50)
-
-        # Camera input with fallback to file upload
-        input_method = st.radio("Choose input method:", ["Use Camera", "Upload Images"], key="input_method")
-
-        frame = None
-        if input_method == "Use Camera":
-            uploaded_image = st.camera_input("Take a picture", key=f"capture_cam_input_{st.session_state.saved_count}")
-            if uploaded_image is not None:
-                file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
-                frame = cv2.imdecode(file_bytes, 1)
+    if st.button("Start Capture"):
+        phone_without_code = user_phoneNo.strip()
+        if not user_name.strip():
+            st.error("⚠️ Enter a valid name!")
+        elif not phone_without_code.isdigit() or len(phone_without_code) != 10:
+            st.error("⚠️ Enter a valid 10-digit phone number!")
         else:
-            uploaded_files = st.file_uploader("Upload images (max 50)", type=["jpg", "jpeg", "png"],
-                                              accept_multiple_files=True,
-                                              key=f"upload_capture_{st.session_state.saved_count}")
-            if uploaded_files:
-                for uploaded_file in uploaded_files:
-                    if st.session_state.saved_count >= 50:
-                        break
-                    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-                    frame = cv2.imdecode(file_bytes, 1)
-                    break  # Process one image at a time to mimic camera input flow
+            full_phone_number = f"{country_code}{phone_without_code}"
+            user_map[str(user_id)] = {"name": user_name, "phone": full_phone_number, "address": user_address,
+                                      "gender": user_gender, "country": selected_country}
+            save_user_map(user_map)
+            cap = None if "IS_CLOUD" in os.environ else cv2.VideoCapture(0)
+            get_frame_cloud_or_local(user_id, max_images=50, cap=cap)
+            st.success(f"✅ Dataset captured for {user_name} (ID: {user_id})")
 
-        if frame is not None and st.session_state.saved_count < 50:
-            with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5,
-                                       min_tracking_confidence=0.5) as face_mesh:
-                saved = detect_and_save(frame, faceCascade, st.session_state.saved_count,
-                                        st.session_state.current_user_id, face_mesh)
-                if saved:
-                    st.session_state.saved_count += 1
-                    progress_bar.progress(st.session_state.saved_count / 50)
-                    st.info(f"Image {st.session_state.saved_count} saved.")
-                    st.rerun()
-
-        if st.session_state.saved_count >= 50:
-            st.success(f"✅ Dataset captured for User ID: {st.session_state.current_user_id}")
-            st.session_state.capture_in_progress = False
-            st.session_state.saved_count = 0
-            st.session_state.current_user_id = None
-            st.rerun()
-
-# Train Model
 elif choice == "🧠 Train Model":
     if st.button("Train Now"):
         trained = train_classifier("data")
@@ -291,36 +278,39 @@ elif choice == "🧠 Train Model":
         else:
             st.error("❌ No valid data to train.")
 
-# Recognize Face
 elif choice == "🔍 Recognize Face":
     if clf is None or len(user_map) == 0:
         st.warning("⚠️ No trained model or users. Capture dataset and train first.")
-    else:
-        st.info("🔎 Use your camera or upload an image to recognize a face.")
-        st.info(
-            "📷 Please ensure camera access is enabled in your browser settings. On mobile, go to your browser's site settings and allow camera access.")
-
-        input_method = st.radio("Choose input method:", ["Use Camera", "Upload Image"], key="recognition_input_method")
-
-        frame = None
-        if input_method == "Use Camera":
-            uploaded_image = st.camera_input("Take a picture", key="recognize_cam_input")
-            if uploaded_image is not None:
-                file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
-                frame = cv2.imdecode(file_bytes, 1)
-        else:
-            uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"], key="recognize_upload")
-            if uploaded_file is not None:
-                file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-                frame = cv2.imdecode(file_bytes, 1)
-
-        if frame is not None:
-            with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5,
-                                       min_tracking_confidence=0.5) as face_mesh:
+    elif st.button("Start Recognition"):
+        st.info("🔎 Recognition started. Close Streamlit to stop.")
+        cap = None if "IS_CLOUD" in os.environ else cv2.VideoCapture(0)
+        stframe = st.empty()
+        with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5,
+                                  min_tracking_confidence=0.5) as face_mesh:
+            while True:
+                if cap is not None:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                else:
+                    uploaded_image = st.camera_input("Take a picture")
+                    if uploaded_image is None:
+                        continue
+                    file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+                    frame = cv2.imdecode(file_bytes, 1)
                 frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
-            st.image(frame, channels="BGR")
+                stframe.image(frame, channels="BGR")
 
-# View Registered Users
+elif choice == "🖼️ Upload Image for Recognition":
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+    if uploaded_file is not None:
+        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+        frame = cv2.imdecode(file_bytes, 1)
+        with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5,
+                                  min_tracking_confidence=0.5) as face_mesh:
+            frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
+        st.image(frame, channels="BGR")
+
 elif choice == "📋 View Registered Users":
     if len(user_map) == 0:
         st.info("No users registered.")
@@ -337,9 +327,8 @@ elif choice == "📋 View Registered Users":
                 name = info
                 phone = gender = address = country = "N/A"
             count = len([f for f in os.listdir("data") if f.startswith(f"user.{uid}.")])
-            data.append(
-                {"User ID": uid, "Name": name, "Phone": phone, "Gender": gender, "Country": country, "Address": address,
-                 "Images": count})
+            data.append({"User ID": uid, "Name": name, "Phone": phone, "Gender": gender, "Country": country,
+                         "Address": address, "Images": count})
         st.table(data)
         df = pd.DataFrame(data)
         output = BytesIO()
@@ -348,7 +337,6 @@ elif choice == "📋 View Registered Users":
         st.download_button("📥 Download Users as Excel", data=output.getvalue(), file_name="registered_users.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# Delete User
 elif choice == "🗑️ Delete User":
     del_id = st.number_input("Enter User ID to Delete", min_value=1, step=1)
     if st.button("Delete User"):
@@ -365,7 +353,6 @@ elif choice == "🗑️ Delete User":
         else:
             st.error("User not found.")
 
-# View User Statistics
 elif choice == "📊 View User Statistics":
     total_users = len(user_map)
     total_images = len(os.listdir("data")) if os.path.exists("data") else 0
@@ -392,7 +379,6 @@ elif choice == "📊 View User Statistics":
         ax2.set_title("Dataset Distribution")
         st.pyplot(fig2)
 
-# Update All User Info
 elif choice == "🔄 Update All User Info":
     st.subheader("Update User Information")
     current_users = {uid: info['name'] if isinstance(info, dict) else info for uid, info in user_map.items()}
@@ -412,7 +398,8 @@ elif choice == "🔄 Update All User Info":
                     phone_without_code = phone_without_code[len(code):]
                     found = True
                     break
-            if not found: selected_country_default = "India"
+            if not found:
+                selected_country_default = "India"
         else:
             selected_country_default = user_info.get("country", "India")
 
@@ -438,7 +425,3 @@ elif choice == "🔄 Update All User Info":
                                         "country": upd_country, "address": upd_address}
                     save_user_map(user_map)
                     st.success(f"✅ User {upd_name} (ID {upd_id}) updated successfully!")
-
-# Logout
-elif choice == "🚪 Logout":
-    logout()

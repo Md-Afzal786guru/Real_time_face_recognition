@@ -1,6 +1,8 @@
-streamlit
-opencv-contrib-python-headless
-numpy
-pandas
-matplotlib
-openpyxl
+streamlit==1.39.0
+opencv-contrib-python-headless==4.10.0.84
+mediapipe==0.10.14
+protobuf==4.25.3
+numpy==1.26.4
+pandas==2.2.3
+matplotlib==3.9.2
+openpyxl==3.1.5
