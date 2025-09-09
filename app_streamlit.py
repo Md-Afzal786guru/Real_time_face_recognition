@@ -12,7 +12,6 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 import hashlib
 
-# ---------------- Admin Authentication ---------------- #
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD_HASH = hashlib.sha256("admin123".encode()).hexdigest()
 
@@ -23,17 +22,16 @@ def authenticate(username, password):
     hashed_password = hashlib.sha256(password.encode()).hexdigest()
     if username == ADMIN_USERNAME and hashed_password == ADMIN_PASSWORD_HASH:
         st.session_state.authenticated = True
-        st.success("✅ Logged in as Admin!")
+        st.success("Logged in as Admin!")
     else:
-        st.error("❌ Incorrect username or password.")
+        st.error("Incorrect username or password.")
         st.session_state.authenticated = False
 
 def logout():
     st.session_state.authenticated = False
-    st.info("🔒 Logged out successfully.")
+    st.info("Logged out successfully.")
     st.rerun()
 
-# ---------------- Setup ---------------- #
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 logging.getLogger("tensorflow").setLevel(logging.FATAL)
@@ -48,7 +46,6 @@ COUNTRY_CODES = {
     "France": "+33", "Japan": "+81", "Brazil": "+55", "Mexico": "+52",
 }
 
-# ---------------- User Map ---------------- #
 def load_user_map():
     if os.path.exists(USER_MAP_FILE):
         with open(USER_MAP_FILE, "r") as f:
@@ -66,7 +63,6 @@ def get_next_user_id():
     existing_ids = sorted(int(uid) for uid in user_map.keys())
     return max(existing_ids) + 1
 
-# ---------------- Face Detection & Recognition ---------------- #
 def detect(frame, faceCascade, img_id, user_id, face_mesh, csv_writer):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = faceCascade.detectMultiScale(gray, 1.3, 5)
@@ -156,8 +152,7 @@ def train_classifier(data_dir="data"):
     recognizer.save("classifier.yml")
     return True
 
-# ---------------- Capture Function (Camera works on phone & laptop) ---------------- #
-def get_frame_any_device(user_id, max_images=50):
+def get_frame_cloud_or_local(user_id, max_images=50, cap=None):
     saved_count = 0
     stframe = st.empty()
     os.makedirs("landmarks", exist_ok=True)
@@ -165,32 +160,37 @@ def get_frame_any_device(user_id, max_images=50):
     csv_file = open(f"landmarks/user_{user_id}.csv", mode="w", newline="")
     csv_writer = csv.writer(csv_file)
 
-    with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
-                               min_detection_confidence=0.5,
-                               min_tracking_confidence=0.5) as face_mesh:
-
-        st.info(f"Capture up to {max_images} images.")
-        uploaded_image = st.camera_input("📸 Take a picture", key="capture_main")
-
-        if uploaded_image is not None:
-            file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
-            frame = cv2.imdecode(file_bytes, 1)
-
+    with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
+        while saved_count < max_images:
+            if "IS_CLOUD" in os.environ:
+                uploaded_image = st.camera_input("Take a picture")
+                if uploaded_image is None:
+                    st.info("Please take a picture...")
+                    continue
+                file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+                frame = cv2.imdecode(file_bytes, 1)
+            else:
+                if cap is None:
+                    cap = cv2.VideoCapture(0)
+                ret, frame = cap.read()
+                if not ret:
+                    st.error("Failed to read from webcam.")
+                    break
             frame, saved = detect(frame, faceCascade, saved_count, user_id, face_mesh, csv_writer)
             if saved:
                 saved_count += 1
-
             stframe.image(frame, channels="BGR", caption=f"Saved Images: {saved_count}/{max_images}")
 
-            if saved_count >= max_images:
-                st.success("✅ Dataset capture completed!")
-
     csv_file.close()
+    if "IS_CLOUD" not in os.environ:
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
 
 
-# ---------------- Streamlit UI ---------------- #
 st.set_page_config(page_title="Face Recognition", page_icon="🧑")
-st.title("🧑 Real Time Face Recognition (Laptop + Phone Camera)")
+st.title("🧑 Real Time Face Recognition")
 
 faceCascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 user_map = load_user_map()
@@ -199,7 +199,6 @@ if os.path.exists("classifier.yml"):
     clf = cv2.face.LBPHFaceRecognizer_create()
     clf.read("classifier.yml")
 
-# ---------------- Sidebar ---------------- #
 public_menu_options = ["📸 Capture Dataset","🧠 Train Model","🔍 Recognize Face","🖼️ Upload Image for Recognition"]
 choice = st.sidebar.selectbox("Public Menu", public_menu_options)
 
@@ -208,6 +207,7 @@ with st.sidebar.form(key='login_form'):
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     submit_button = st.form_submit_button("Login")
+    logout_button = st.form_submit_button("Logout")
     if submit_button:
         authenticate(username,password)
 
@@ -216,7 +216,6 @@ if st.session_state.authenticated:
     admin_choice = st.sidebar.selectbox("Admin Menu", ["📋 View Registered Users","🔄 Update All User Info","📊 View User Statistics","🗑️ Delete User","🚪 Logout"])
     choice = admin_choice
 
-# ---------------- App Logic ---------------- #
 if choice=="📸 Capture Dataset":
     suggested_id = get_next_user_id()
     st.info(f"Next available User ID is {suggested_id}")
@@ -238,7 +237,8 @@ if choice=="📸 Capture Dataset":
             full_phone_number = f"{country_code}{phone_without_code}"
             user_map[str(user_id)] = {"name":user_name,"phone":full_phone_number,"address":user_address,"gender":user_gender,"country":selected_country}
             save_user_map(user_map)
-            get_frame_any_device(user_id)
+            cap = None if "IS_CLOUD" in os.environ else cv2.VideoCapture(0)
+            get_frame_cloud_or_local(user_id, max_images=50, cap=cap)
             st.success(f"✅ Dataset captured for {user_name} (ID: {user_id})")
 
 elif choice=="🧠 Train Model":
@@ -254,14 +254,22 @@ elif choice=="🧠 Train Model":
 elif choice=="🔍 Recognize Face":
     if clf is None or len(user_map)==0:
         st.warning("⚠️ No trained model or users. Capture dataset and train first.")
-    else:
-        uploaded_image = st.camera_input("📸 Take a picture for recognition")
-        if uploaded_image is not None:
-            file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
-            frame = cv2.imdecode(file_bytes, 1)
-            with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
+    elif st.button("Start Recognition"):
+        st.info("🔎 Recognition started. Close Streamlit to stop.")
+        cap = None if "IS_CLOUD" in os.environ else cv2.VideoCapture(0)
+        stframe = st.empty()
+        with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
+            while True:
+                if cap is not None:
+                    ret, frame = cap.read()
+                    if not ret: break
+                else:
+                    uploaded_image = st.camera_input("Take a picture")
+                    if uploaded_image is None: continue
+                    file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+                    frame = cv2.imdecode(file_bytes, 1)
                 frame = recognize(frame, clf, faceCascade, face_mesh, user_map)
-            st.image(frame, channels="BGR")
+                stframe.image(frame, channels="BGR")
 
 
 elif choice=="🖼️ Upload Image for Recognition":
@@ -296,7 +304,6 @@ elif choice=="📋 View Registered Users":
             df.to_excel(writer, index=False, sheet_name="Users")
         st.download_button("📥 Download Users as Excel", data=output.getvalue(), file_name="registered_users.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# Delete User
 elif choice=="🗑️ Delete User":
     del_id = st.number_input("Enter User ID to Delete", min_value=1, step=1)
     if st.button("Delete User"):
@@ -313,7 +320,6 @@ elif choice=="🗑️ Delete User":
         else:
             st.error("User not found.")
 
-# View User Statistics
 elif choice=="📊 View User Statistics":
     total_users = len(user_map)
     total_images = len(os.listdir("data")) if os.path.exists("data") else 0
@@ -337,7 +343,6 @@ elif choice=="📊 View User Statistics":
         ax2.axis("equal"); ax2.set_title("Dataset Distribution")
         st.pyplot(fig2)
 
-# Update All User Info
 elif choice=="🔄 Update All User Info":
     st.subheader("Update User Information")
     current_users = {uid: info['name'] if isinstance(info, dict) else info for uid, info in user_map.items()}
@@ -380,6 +385,5 @@ elif choice=="🔄 Update All User Info":
                     save_user_map(user_map)
                     st.success(f"✅ User {upd_name} (ID {upd_id}) updated successfully!")
 
-# Logout
 elif choice=="🚪 Logout":
     logout()
