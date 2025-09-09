@@ -166,13 +166,13 @@ def get_frame_any_device(user_id, max_images=50):
     csv_writer = csv.writer(csv_file)
 
     with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
-                               min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
-        while saved_count < max_images:
-            uploaded_image = st.camera_input("📸 Take a picture", key=f"capture_{saved_count}")
-            if uploaded_image is None:
-                st.info(f"Saved {saved_count}/{max_images}. Please capture more images.")
-                continue
+                               min_detection_confidence=0.5,
+                               min_tracking_confidence=0.5) as face_mesh:
 
+        st.info(f"Capture up to {max_images} images.")
+        uploaded_image = st.camera_input("📸 Take a picture", key="capture_main")
+
+        if uploaded_image is not None:
             file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
             frame = cv2.imdecode(file_bytes, 1)
 
@@ -182,7 +182,11 @@ def get_frame_any_device(user_id, max_images=50):
 
             stframe.image(frame, channels="BGR", caption=f"Saved Images: {saved_count}/{max_images}")
 
+            if saved_count >= max_images:
+                st.success("✅ Dataset capture completed!")
+
     csv_file.close()
+
 
 # ---------------- Streamlit UI ---------------- #
 st.set_page_config(page_title="Face Recognition", page_icon="🧑")
