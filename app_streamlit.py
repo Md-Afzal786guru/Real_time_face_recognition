@@ -74,35 +74,33 @@ def get_next_user_id():
 
 
 # ---------------- Face Detection & Recognition ---------------- #
-def detect(frame, faceCascade, img_id, user_id, face_mesh, csv_writer):
+def detect_and_save(frame, faceCascade, img_id, user_id, face_mesh):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = faceCascade.detectMultiScale(gray, 1.3, 5)
     saved = False
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb)
 
-    for (x, y, w, h) in faces:
+    os.makedirs("data", exist_ok=True)
+    os.makedirs("landmarks", exist_ok=True)
+
+    if faces is not None and len(faces) > 0:
+        (x, y, w, h) = faces[0]
         face_img = gray[y:y + h, x:x + w]
-        os.makedirs("data", exist_ok=True)
         cv2.imwrite(f"data/user.{user_id}.{img_id}.jpg", face_img)
         saved = True
 
     if results.multi_face_landmarks:
         for face_landmarks in results.multi_face_landmarks:
-            mp_drawing.draw_landmarks(
-                image=frame,
-                landmark_list=face_landmarks,
-                connections=mp_face_mesh.FACEMESH_CONTOURS,
-                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=1),
-                connection_drawing_spec=mp_drawing.DrawingSpec(color=(0, 255, 255), thickness=1)
-            )
             h, w, _ = frame.shape
             row = [user_id, img_id]
             for lm in face_landmarks.landmark:
                 row.append(int(lm.x * w))
                 row.append(int(lm.y * h))
-            csv_writer.writerow(row)
-    return frame, saved
+            with open(f"landmarks/user_{user_id}.csv", mode="a", newline="") as f:
+                csv_writer = csv.writer(f)
+                csv_writer.writerow(row)
+    return saved
 
 
 def recognize(frame, clf, faceCascade, face_mesh, user_map, threshold=70):
@@ -200,52 +198,69 @@ if st.session_state.authenticated:
 # ---------------- App Logic ---------------- #
 # Capture Dataset
 if choice == "📸 Capture Dataset":
-    suggested_id = get_next_user_id()
-    st.info(f"Next available User ID is {suggested_id}")
-    user_id = st.number_input("Enter User ID", min_value=suggested_id, value=suggested_id, step=1)
-    user_name = st.text_input("Enter User Name")
-    selected_country = st.selectbox("Select Your Country", list(COUNTRY_CODES.keys()))
-    country_code = COUNTRY_CODES[selected_country]
-    user_phoneNo = st.text_input(f"Enter Your Phone No (e.g., {country_code} ...)")
-    user_address = st.text_area("Enter Your Address")
-    user_gender = st.selectbox("Select Your Gender", ["Male", "Female", "Other"])
+    if "capture_in_progress" not in st.session_state:
+        st.session_state.capture_in_progress = False
+        st.session_state.saved_count = 0
+        st.session_state.current_user_id = None
+        st.session_state.csv_file_initialized = False
 
-    start_capture = st.button("Start Capture")
-    if start_capture:
-        phone_without_code = user_phoneNo.strip()
-        if not user_name.strip():
-            st.error("⚠️ Enter a valid name!")
-        elif not phone_without_code.isdigit() or len(phone_without_code) != 10:
-            st.error("⚠️ Enter a valid 10-digit phone number!")
-        else:
-            full_phone_number = f"{country_code}{phone_without_code}"
-            user_map[str(user_id)] = {"name": user_name, "phone": full_phone_number, "address": user_address,
-                                      "gender": user_gender, "country": selected_country}
-            save_user_map(user_map)
+    if not st.session_state.capture_in_progress:
+        suggested_id = get_next_user_id()
+        st.info(f"Next available User ID is {suggested_id}")
+        user_id = st.number_input("Enter User ID", min_value=suggested_id, value=suggested_id, step=1,
+                                  key='user_id_input')
+        user_name = st.text_input("Enter User Name", key='user_name_input')
+        selected_country = st.selectbox("Select Your Country", list(COUNTRY_CODES.keys()), key='country_select')
+        country_code = COUNTRY_CODES[selected_country]
+        user_phoneNo = st.text_input(f"Enter Your Phone No (e.g., {country_code} ...)", key='phone_input')
+        user_address = st.text_area("Enter Your Address", key='address_input')
+        user_gender = st.selectbox("Select Your Gender", ["Male", "Female", "Other"], key='gender_select')
 
-    if start_capture and user_name.strip() and user_phoneNo.strip() and user_phoneNo.strip().isdigit() and len(
-            user_phoneNo.strip()) == 10:
-        saved_count = 0
-        stframe = st.empty()
-        os.makedirs("landmarks", exist_ok=True)
-        os.makedirs("data", exist_ok=True)
-        csv_file = open(f"landmarks/user_{user_id}.csv", mode="w", newline="")
-        csv_writer = csv.writer(csv_file)
-        with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5,
-                                   min_tracking_confidence=0.5) as face_mesh:
-            while saved_count < 50:
-                uploaded_image = st.camera_input("Take a picture")
-                if uploaded_image is None:
-                    st.info("Please take a picture...")
-                    continue
-                file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
-                frame = cv2.imdecode(file_bytes, 1)
-                frame, saved = detect(frame, faceCascade, saved_count, user_id, face_mesh, csv_writer)
-                if saved:
-                    saved_count += 1
-                stframe.image(frame, channels="BGR", caption=f"Saved Images: {saved_count}/50")
-        csv_file.close()
-        st.success(f"✅ Dataset captured for {user_name} (ID: {user_id})")
+        start_capture = st.button("Start Capture")
+        if start_capture:
+            phone_without_code = user_phoneNo.strip()
+            if not user_name.strip():
+                st.error("⚠️ Enter a valid name!")
+            elif not phone_without_code.isdigit() or len(phone_without_code) != 10:
+                st.error("⚠️ Enter a valid 10-digit phone number!")
+            else:
+                full_phone_number = f"{country_code}{phone_without_code}"
+                user_map[str(user_id)] = {"name": user_name, "phone": full_phone_number, "address": user_address,
+                                          "gender": user_gender, "country": selected_country}
+                save_user_map(user_map)
+                st.session_state.capture_in_progress = True
+                st.session_state.saved_count = 0
+                st.session_state.current_user_id = user_id
+                st.session_state.csv_file_initialized = False
+                st.rerun()
+
+    if st.session_state.capture_in_progress:
+        st.info(
+            f"Saving images for User ID: {st.session_state.current_user_id}. {st.session_state.saved_count}/50 saved.")
+        progress_bar = st.progress(st.session_state.saved_count / 50)
+
+        uploaded_image = st.camera_input("Take a picture", key="capture_cam_input")
+
+        if uploaded_image is not None and st.session_state.saved_count < 50:
+            file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
+            frame = cv2.imdecode(file_bytes, 1)
+
+            saved = detect_and_save(frame, faceCascade, st.session_state.saved_count, st.session_state.current_user_id,
+                                    mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
+                                                          min_detection_confidence=0.5, min_tracking_confidence=0.5))
+
+            if saved:
+                st.session_state.saved_count += 1
+                progress_bar.progress(st.session_state.saved_count / 50)
+                st.info(f"Image {st.session_state.saved_count} saved.")
+                st.rerun()  # Rerun to update the UI and get a fresh camera input
+
+        if st.session_state.saved_count >= 50:
+            st.success(f"✅ Dataset captured for User ID: {st.session_state.current_user_id}")
+            st.session_state.capture_in_progress = False
+            st.session_state.saved_count = 0
+            st.session_state.current_user_id = None
+            st.rerun()
 
 # Train Model
 elif choice == "🧠 Train Model":
@@ -264,7 +279,7 @@ elif choice == "🔍 Recognize Face":
         st.warning("⚠️ No trained model or users. Capture dataset and train first.")
     else:
         st.info("🔎 Upload or take a picture to recognize a face.")
-        uploaded_image = st.camera_input("Take a picture")
+        uploaded_image = st.camera_input("Take a picture", key="recognize_cam_input")
         if uploaded_image is not None:
             file_bytes = np.asarray(bytearray(uploaded_image.read()), dtype=np.uint8)
             frame = cv2.imdecode(file_bytes, 1)
