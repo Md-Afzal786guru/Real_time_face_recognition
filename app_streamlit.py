@@ -211,7 +211,7 @@ with st.sidebar.form(key='login_form'):
     st.markdown("### Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-    st.markdown("---")  # Adds a horizontal line for separation
+    st.markdown("---")
     submit_button = st.form_submit_button("Login", help="Click to log in as admin")
     if submit_button:
         authenticate(username, password)  # Call authenticate on button click
