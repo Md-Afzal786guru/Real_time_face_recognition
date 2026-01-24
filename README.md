@@ -41,4 +41,4 @@ Install dependencies
 pip install streamlit opencv-python mediapipe numpy pandas matplotlib openpyxl
 
 ▶️ Usage
-streamlit run streammlit_app.py
+streamlit run app_streamlit.py
